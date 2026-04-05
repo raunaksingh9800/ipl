@@ -1,65 +1,136 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
+import { Zap, Info } from "lucide-react";
 
 export default function Home() {
+  const [showSplash, setShowSplash] = useState(true);
+  const [matchData, setMatchData] = useState("Loading Match Data...");
+
+  useEffect(() => {
+    // Fetch dynamic match data
+    const fetchMatch = async () => {
+      try {
+        const response = await fetch('/matches.csv');
+        const text = await response.text();
+        const rows = text.split('\n');
+        
+        // Format today's date to match CSV format (e.g. "05-APR-26")
+        const today = new Date();
+        const formattedToday = today.toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "2-digit"
+        }).toUpperCase().replace(/ /g, '-');
+
+        const todayMatches = [];
+        for (let i = 1; i < rows.length; i++) {
+          const matchCols = rows[i].split(',');
+          if (matchCols.length > 5 && matchCols[1] === formattedToday) {
+            todayMatches.push(`${matchCols[4]} vs ${matchCols[5]}`);
+          }
+        }
+
+        if (todayMatches.length > 0) {
+          setMatchData(todayMatches.join(' & '));
+        } else {
+          setMatchData("No matches scheduled today");
+        }
+        
+      } catch (err) {
+        console.error("Match fetch failed:", err);
+        setMatchData("SRH vs LSG"); // Fallback
+      }
+    };
+    
+    fetchMatch();
+
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 2800); // Wait 2.8 seconds
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background text-foreground overflow-hidden">
+      <AnimatePresence>
+        {showSplash && (
+          <motion.div
+            key="splash"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, scale: 1.1, filter: "blur(10px)" }}
+            transition={{ duration: 0.8, ease: "easeInOut" }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background"
+          >
+            <motion.h1
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5, duration: 1 }}
+              className="text-5xl md:text-7xl font-serif tracking-widest uppercase text-accent font-bold text-center px-4"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+              Predicted<br /><span className="text-foreground">By God</span>
+            </motion.h1>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {!showSplash && (
+        <motion.main
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 1, delay: 0.2 }}
+          className="flex flex-col items-center justify-center w-full max-w-4xl px-6 py-12"
+        >
+          {/* Chip */}
+          <div className="border border-accent/30 bg-accent/5 px-4 py-1.5 mb-8 flex items-center gap-2 uppercase tracking-widest text-xs font-semibold text-accent max-w-[90vw] text-center">
+            <span className="shrink-0 w-2 h-2 bg-accent animate-pulse" style={{ borderRadius: 0 }}></span>
+            <span className="truncate">Today's Match: {matchData}</span>
+          </div>
+
+          <h2 className="text-4xl md:text-6xl lg:text-7xl font-serif text-center font-bold tracking-tight mb-6">
+            Absolute <span className="text-accent italic">Precision.</span>
+          </h2>
+
+          <p className="max-w-2xl text-center text-lg md:text-xl text-zinc-400 mb-12 font-light leading-relaxed">
+            Harnessing the most advanced predictive algorithms and divinely inspired data models to bring you the exact outcome, before a single ball is bowled.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+          <div className="flex flex-col sm:flex-row w-full sm:w-auto items-center gap-6">
+            <Link
+              href="/pricing"
+              className="group relative flex w-full sm:w-auto items-center justify-center gap-3 bg-foreground text-background px-8 py-4 font-bold tracking-widest uppercase hover:bg-accent hover:text-black transition-all duration-300"
+            >
+              <Zap className="w-5 h-5 fill-current" />
+              <span>Predict at 25₹</span>
+            </Link>
+
+            <Link
+              href="/learn-more"
+              className="group flex w-full sm:w-auto items-center justify-center gap-3 border border-zinc-800 bg-transparent px-8 py-4 font-semibold tracking-widest uppercase text-zinc-300 hover:border-accent hover:text-accent transition-all duration-300"
+            >
+              <Info className="w-5 h-5" />
+              <span>Learn More</span>
+            </Link>
+          </div>
+
+          <div className="mt-24 grid grid-cols-1 sm:grid-cols-3 gap-8 w-full border-t border-zinc-900 pt-12">
+            {[
+              { label: "Prophet AI", val: "v4.2" },
+              { label: "Accuracy", val: "90.9%" },
+              { label: "Trusted By", val: "1000+" }
+            ].map((stat, i) => (
+              <div key={i} className="flex flex-col items-center justify-center space-y-2">
+                <span className="text-sm font-light text-zinc-500 uppercase tracking-widest">{stat.label}</span>
+                <span className="text-3xl font-serif text-foreground font-bold">{stat.val}</span>
+              </div>
+            ))}
+          </div>
+
+        </motion.main>
+      )}
     </div>
   );
 }
