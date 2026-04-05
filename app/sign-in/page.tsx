@@ -18,16 +18,20 @@ export default function SignIn() {
     setLoading(true);
     setErrorMsg("");
     
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { data, error } = await supabase.from('custom_users')
+      .select('*')
+      .eq('email', email)
+      .eq('password', password)
+      .single();
 
     setLoading(false);
 
-    if (error) {
-      setErrorMsg(error.message);
+    if (error || !data) {
+      setErrorMsg("Invalid credentials. Try again.");
     } else {
+      localStorage.setItem("prophet_user_id", data.id);
+      localStorage.setItem("prophet_user_name", data.full_name);
+
       if (localStorage.getItem("pending_payment_amount")) {
         router.push("/pricing");
       } else {

@@ -19,21 +19,20 @@ export default function SignUp() {
     setLoading(true);
     setErrorMsg("");
 
-    const { data, error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.from('custom_users').insert({
       email,
       password,
-      options: {
-        data: {
-          full_name: name
-        }
-      }
-    });
+      full_name: name
+    }).select().single();
 
     setLoading(false);
 
-    if (error) {
-      setErrorMsg(error.message);
+    if (error || !data) {
+      setErrorMsg(error?.message || "Failed to create user.");
     } else {
+      localStorage.setItem("prophet_user_id", data.id);
+      localStorage.setItem("prophet_user_name", data.full_name);
+
       if (localStorage.getItem("pending_payment_amount")) {
         router.push("/pricing");
       } else {

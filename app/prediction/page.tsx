@@ -1,28 +1,72 @@
 "use client";
 
 import Link from "next/link";
-import { Copy, Navigation, CheckCircle, LogOut, Zap } from "lucide-react";
+import { Copy, Navigation, CheckCircle, LogOut, Zap, AlertCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { supabase } from "@/utils/supabase/client";
 import { useRouter } from "next/navigation";
 
 export default function Prediction() {
   const [loading, setLoading] = useState(true);
+  const [isUnderReview, setIsUnderReview] = useState(false);
+  const [isRejected, setIsRejected] = useState(false);
   const [userName, setUserName] = useState<string | null>(null);
   const [userTier, setUserTier] = useState<string>("Toss Prediction");
   const [predData, setPredData] = useState({ toss: "Pending", match: "Pending", insight: "" });
+  const [modal, setModal] = useState<{isOpen: boolean; title: string; message: string; type: 'error' | 'success' | 'upgrade'}>({
+    isOpen: false, title: "", message: "", type: "error"
+  });
   const router = useRouter();
+
+  const pollTransactionAuth = async (userId: string) => {
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data: txs } = await supabase.from('transactions')
+      .select('*')
+      .eq('user_id', userId)
+      .gte('created_at', `${today}T00:00:00.000Z`)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (txs && txs.length > 0) {
+      const latest = txs[0];
+      if (latest.status === 'pending') {
+        setIsUnderReview(true);
+        setIsRejected(false);
+      } else if (latest.status === 'rejected') {
+        setIsUnderReview(false);
+        setIsRejected(true);
+      } else if (latest.status === 'approved') {
+        setIsUnderReview(false);
+        setIsRejected(false);
+        setUserTier(latest.tier_name);
+      }
+    } else {
+      setIsUnderReview(false);
+      setIsRejected(false);
+      setUserTier("Toss Prediction");
+    }
+  };
 
   useEffect(() => {
     // Fetch User
     const fetchUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserName(user.user_metadata.full_name || null);
-        setUserTier(user.user_metadata.tier || "Toss Prediction");
+      const userId = localStorage.getItem("prophet_user_id");
+      const name = localStorage.getItem("prophet_user_name");
+      if (userId) {
+        setUserName(name || null);
+        await pollTransactionAuth(userId);
+      } else {
+        router.push("/sign-in");
       }
     };
     fetchUser();
+    
+    // Auto-Poll validation checking every 30 seconds
+    const intervalId = setInterval(() => {
+      const userId = localStorage.getItem("prophet_user_id");
+      if (userId) pollTransactionAuth(userId);
+    }, 30000);
 
     // Fetch Predictions from Admin Data
     const fetchPredictions = async () => {
@@ -40,19 +84,22 @@ export default function Prediction() {
     const timer = setTimeout(() => {
       setLoading(false);
     }, 2000);
-    return () => clearTimeout(timer);
+    
+    return () => {
+       clearTimeout(timer);
+       clearInterval(intervalId);
+    };
   }, []);
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    localStorage.removeItem("prophet_user_id");
+    localStorage.removeItem("prophet_user_name");
     router.push("/");
   };
 
   const handleChatAccess = () => {
     if (userTier !== "Talk to Agent") {
-      if (confirm("You need the Talk to Agent tier (₹100) to access Prophet AI Chat. Upgrade now?")) {
-        router.push("/pricing");
-      }
+      setModal({ isOpen: true, title: "Upgrade Required", message: "You need the Talk to Agent tier (₹100) to access Prophet AI Chat.", type: "upgrade" });
     } else {
       router.push("/chatbot");
     }
@@ -69,14 +116,18 @@ export default function Prediction() {
             {userName && (
               <p className="text-sm mt-2 text-zinc-400 font-light tracking-wide flex items-center gap-2">
                 Welcome, <span className="text-accent font-medium uppercase">{userName}</span>
-                <span className="text-[10px] bg-accent/10 border border-accent/20 px-2 rounded-none text-accent uppercase tracking-widest font-bold">{userTier}</span>
+                {!isUnderReview && (
+                  <span className="text-[10px] bg-accent/10 border border-accent/20 px-2 rounded-none text-accent uppercase tracking-widest font-bold">{userTier}</span>
+                )}
               </p>
             )}
           </div>
           <div className="flex items-center gap-6">
-            <button onClick={handleChatAccess} className="text-sm font-bold uppercase tracking-widest border border-zinc-800 px-6 py-2 hover:border-accent hover:text-accent transition-colors">
-              Consult Agent
-            </button>
+            {!isUnderReview && (
+              <button onClick={handleChatAccess} className="text-sm font-bold uppercase tracking-widest border border-zinc-800 px-6 py-2 hover:border-accent hover:text-accent transition-colors">
+                Consult Agent
+              </button>
+            )}
             <button
               onClick={handleSignOut}
               className="text-xs font-bold uppercase tracking-widest text-zinc-500 hover:text-red-500 transition-colors flex items-center gap-2"
@@ -90,6 +141,25 @@ export default function Prediction() {
           <div className="flex flex-col items-center justify-center py-20">
             <div className="w-16 h-16 border-t-2 border-accent rounded-full animate-spin mb-8" style={{ borderRadius: 0 }}></div>
             <p className="text-xs uppercase tracking-widest text-zinc-500 animate-pulse">Running probabilistic models...</p>
+          </div>
+        ) : isRejected ? (
+          <div className="flex flex-col items-center justify-center py-32 border border-red-500/20 bg-red-500/5">
+             <AlertCircle className="w-16 h-16 text-red-500 mb-6 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]" />
+             <h2 className="text-2xl md:text-3xl font-serif text-red-500 uppercase tracking-widest font-bold mb-4 text-center">Transmission Rejected</h2>
+             <p className="text-xs uppercase tracking-widest text-zinc-400 max-w-md text-center leading-relaxed">
+               The payment didn't make it through our proxy nodes. If any funds were deducted, they will be automatically refunded within 2 business days.
+             </p>
+             <Link href="/pricing" className="mt-10 bg-accent text-black hover:bg-accent/80 uppercase tracking-widest font-bold py-4 px-12 text-xs transition-colors">
+               Try Again
+             </Link>
+          </div>
+        ) : isUnderReview ? (
+          <div className="flex flex-col items-center justify-center py-32 border border-accent/20 bg-accent/5">
+             <div className="w-16 h-16 border-t-2 border-b-2 border-accent animate-spin mb-8" style={{ borderRadius: 0 }}></div>
+             <h2 className="text-2xl md:text-3xl font-serif text-accent uppercase tracking-widest font-bold mb-4 text-center">Authorization Pending</h2>
+             <p className="text-xs uppercase tracking-widest text-zinc-400 max-w-md text-center leading-relaxed">
+               Your proof of payment is currently being analyzed by a divine proxy. Please maintain this link; access to the Prophet Matrix will be granted momentarily upon approval.
+             </p>
           </div>
         ) : (
           <div className="space-y-12 animate-fade-in relative">
@@ -164,6 +234,46 @@ export default function Prediction() {
           </div>
         )}
       </div>
+
+      {/* Brutalist Modal Overlay */}
+      {modal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-zinc-950 border border-zinc-700 p-8 max-w-md w-full shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200">
+            
+            {(modal.type === 'error' || modal.type === 'upgrade') ? (
+              <AlertCircle className="w-12 h-12 text-accent mb-6 drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]" />
+            ) : (
+              <CheckCircle className="w-12 h-12 text-accent mb-6 drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]" />
+            )}
+            
+            <h3 className="text-2xl font-bold font-serif mb-3 uppercase tracking-widest text-white">
+              {modal.title}
+            </h3>
+            
+            <p className="text-zinc-400 text-sm mb-8 leading-relaxed font-mono">
+              {modal.message}
+            </p>
+            
+            <div className="w-full flex gap-4">
+              {modal.type === 'upgrade' && (
+                <button 
+                  onClick={() => router.push("/pricing")} 
+                  className="flex-1 bg-accent text-black font-bold uppercase tracking-widest py-4 text-xs hover:bg-accent/80 transition-colors"
+                >
+                  Upgrade Tier
+                </button>
+              )}
+              <button 
+                onClick={() => setModal({...modal, isOpen: false})} 
+                className="flex-1 bg-white text-black font-bold uppercase tracking-widest py-4 text-xs hover:bg-zinc-200 transition-colors"
+              >
+                {modal.type === 'upgrade' ? 'Cancel' : 'Acknowledge'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Lock, Eye, Send, Users, Activity } from "lucide-react";
-import io, { Socket } from "socket.io-client";
+import { Lock, Eye, Send, Users, Activity, Check, X, Image as ImageIcon } from "lucide-react";
+import { supabase } from "@/utils/supabase/client";
 
 export default function AdminPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -12,8 +12,9 @@ export default function AdminPage() {
   const [tossPred, setTossPred] = useState("");
   const [matchPred, setMatchPred] = useState("");
   
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [activeUsers, setActiveUsers] = useState<any[]>([]);
+  const [pendingTxs, setPendingTxs] = useState<any[]>([]);
+  
+  const [activeUsers, setActiveUsers] = useState<{id: string; name: string; email: string}[]>([]);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [messages, setMessages] = useState<Record<string, { role: string, content: string }[]>>({});
   const [chatInput, setChatInput] = useState("");
@@ -22,6 +23,7 @@ export default function AdminPage() {
   const [todayMatch, setTodayMatch] = useState("Loading...");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const userChannelsRef = useRef<Record<string, ReturnType<typeof supabase.channel>>>({}); // kept for cleanup
 
   useEffect(() => {
     // Current Time Clock
@@ -76,42 +78,80 @@ export default function AdminPage() {
           setMatchPred(data.match || "");
         });
 
-      // Connect Socket
-      const newSocket = io("http://localhost:3001");
-      setSocket(newSocket);
+      // Poll matching manual transactions
+      const fetchTxs = async () => {
+        const { data } = await supabase.from('transactions').select('*').eq('status', 'pending');
+        if (data) setPendingTxs(data);
+      };
+      fetchTxs();
+      const txInterval = setInterval(fetchTxs, 5000);
 
-      newSocket.on("connect", () => {
-        newSocket.emit("identify", { role: "admin" });
-      });
+      // Load existing chat history to populate Live Targets on mount
+      (async () => {
+        const { data: existingMsgs, error: chatErr } = await supabase
+          .from("chat_messages")
+          .select("*")
+          .order("created_at", { ascending: true });
 
-      newSocket.on("active_users", (users) => {
-        setActiveUsers(users);
-        users.forEach((u: any) => {
-           if (!messages[u.id]) setMessages(prev => ({ ...prev, [u.id]: [] }));
-        });
-      });
+        if (chatErr) {
+          console.error("chat_messages table error (run SQL to create it):", chatErr.message);
+        } else if (existingMsgs && existingMsgs.length > 0) {
+          const usersMap: Record<string, { id: string; name: string; email: string }> = {};
+          const msgsMap: Record<string, { role: string; content: string }[]> = {};
+          existingMsgs.forEach((m: any) => {
+            if (!usersMap[m.user_id]) {
+              usersMap[m.user_id] = { id: m.user_id, name: m.user_name || "Unknown", email: "" };
+            }
+            if (!msgsMap[m.user_id]) msgsMap[m.user_id] = [];
+            msgsMap[m.user_id].push({ role: m.role, content: m.content });
+          });
+          setActiveUsers(Object.values(usersMap));
+          setMessages(msgsMap);
+        }
+      })();
 
-      newSocket.on("user_connected", (user) => {
-        setActiveUsers(prev => [...prev.filter(u => u.id !== user.id), user]);
-      });
-
-      newSocket.on("user_disconnected", (socketId) => {
-        setActiveUsers(prev => prev.filter(u => u.id !== socketId));
-        if (selectedUser === socketId) setSelectedUser(null);
-      });
-
-      newSocket.on("receive_user_message", ({ from, text }) => {
-        setMessages(prev => {
-          const userMsgs = prev[from] || [];
-          return { ...prev, [from]: [...userMsgs, { role: "user", content: text }] };
-        });
-      });
+      // Subscribe to chat_messages via Postgres Changes (DB-backed, reliable everywhere)
+      const chatChannel = supabase
+        .channel("admin_chat_watch")
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "chat_messages" },
+          (payload) => {
+            const msg = payload.new as any;
+            if (msg.role === "user") {
+              // Add user to active list if new
+              setActiveUsers(prev => {
+                if (!prev.find(u => u.id === msg.user_id)) {
+                  return [...prev, { id: msg.user_id, name: msg.user_name || "Unknown", email: "" }];
+                }
+                return prev;
+              });
+              // Append message to that user's thread
+              setMessages(prev => {
+                const existing = prev[msg.user_id] || [];
+                return { ...prev, [msg.user_id]: [...existing, { role: "user", content: msg.content }] };
+              });
+            }
+          }
+        )
+        .subscribe();
 
       return () => {
-        newSocket.disconnect();
+        supabase.removeChannel(chatChannel);
+        clearInterval(txInterval);
       };
     }
   }, [isAuthenticated]);
+
+  const handleApproveTx = async (txId: string) => {
+    await supabase.from('transactions').update({ status: 'approved' }).eq('id', txId);
+    setPendingTxs(prev => prev.filter(t => t.id !== txId));
+  };
+  
+  const handleRejectTx = async (txId: string) => {
+    await supabase.from('transactions').update({ status: 'rejected' }).eq('id', txId);
+    setPendingTxs(prev => prev.filter(t => t.id !== txId));
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -131,17 +171,25 @@ export default function AdminPage() {
     alert("Predictions Updated Successfully");
   };
 
-  const sendChatMessage = () => {
-    if (!chatInput.trim() || !selectedUser || !socket) return;
-    
-    socket.emit("admin_message", { to: selectedUser, text: chatInput });
-    
+  const sendChatMessage = async () => {
+    if (!chatInput.trim() || !selectedUser) return;
+    const text = chatInput.trim();
+    setChatInput("");
+
+    // Show optimistically in admin UI
     setMessages(prev => {
       const userMsgs = prev[selectedUser] || [];
-      return { ...prev, [selectedUser]: [...userMsgs, { role: "agent", content: chatInput }] };
+      return { ...prev, [selectedUser]: [...userMsgs, { role: "admin", content: text }] };
     });
-    
-    setChatInput("");
+
+    // Insert into chat_messages — user's Postgres Changes listener will pick it up
+    const user = activeUsers.find(u => u.id === selectedUser);
+    await supabase.from("chat_messages").insert({
+      user_id: selectedUser,
+      user_name: user?.name || "Unknown",
+      role: "admin",
+      content: text
+    });
   };
 
   if (!isAuthenticated) {
@@ -216,7 +264,7 @@ export default function AdminPage() {
             <Activity className="w-4 h-4 text-accent" /> Match Variables
           </h2>
           
-          <div className="space-y-6">
+          <div className="space-y-6 mb-12">
             <div className="p-4 border border-zinc-800 bg-zinc-900/20">
               <label className="block text-xs font-bold tracking-widest text-zinc-500 mb-3 uppercase">Predicted Toss Winner</label>
               <input 
@@ -244,6 +292,47 @@ export default function AdminPage() {
               Push Truth to Matrix
             </button>
           </div>
+
+          <h2 className="text-lg font-bold tracking-widest uppercase mb-6 flex items-center gap-2 text-zinc-300 border-t border-zinc-800 pt-8">
+            <ImageIcon className="w-4 h-4 text-accent" /> Proof Verifications
+          </h2>
+          
+          {pendingTxs.length === 0 ? (
+            <p className="text-xs text-zinc-600 uppercase tracking-widest">No pending transactions.</p>
+          ) : (
+            <div className="space-y-4">
+              {pendingTxs.map(tx => (
+                <div key={tx.id} className="border border-zinc-800 p-4 bg-zinc-900/40">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <p className="font-bold text-sm">{tx.user_name}</p>
+                      <p className="text-xs text-zinc-400 mt-1 uppercase tracking-widest">{tx.tier_name}</p>
+                    </div>
+                    <span className="text-accent font-bold font-serif">₹{tx.amount}</span>
+                  </div>
+                  
+                  {tx.utr_id && (
+                    <p className="text-xs text-zinc-500 block mb-2 font-mono">UTR: {tx.utr_id}</p>
+                  )}
+                  
+                  {tx.proof_url && (
+                    <a href={tx.proof_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:text-blue-300 underline mb-4 inline-block block">
+                      View Screenshot Proof
+                    </a>
+                  )}
+
+                  <div className="flex gap-2 mt-4">
+                    <button onClick={() => handleApproveTx(tx.id)} className="flex-1 bg-green-900/30 text-green-500 border border-green-900/50 hover:bg-green-900/50 py-2 text-xs font-bold uppercase tracking-widest flex justify-center items-center gap-1 transition-colors">
+                      <Check className="w-4 h-4" /> Approve
+                    </button>
+                    <button onClick={() => handleRejectTx(tx.id)} className="flex-1 bg-red-900/30 text-red-500 border border-red-900/50 hover:bg-red-900/50 py-2 text-xs font-bold uppercase tracking-widest flex justify-center items-center gap-1 transition-colors">
+                      <X className="w-4 h-4" /> Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Middle Column: Active Users */}

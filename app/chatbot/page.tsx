@@ -5,68 +5,106 @@ import { ArrowLeft, Send, Cpu, User, LogOut } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "@/utils/supabase/client";
 import { useRouter } from "next/navigation";
-import io, { Socket } from "socket.io-client";
 
 type Message = {
-  role: "user" | "agent";
+  role: "user" | "admin";
   content: string;
 };
 
 export default function Chatbot() {
   const [messages, setMessages] = useState<Message[]>([
-    { role: "agent", content: "Identity verified. I am Prophet AI v4.2. State your inquiry regarding match dynamics." }
+    { role: "admin", content: "Identity verified. I am Prophet AI v4.2. State your inquiry regarding match dynamics." }
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string>("Unknown Interface");
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
-    const newSocket = io("http://localhost:3001");
-    setSocket(newSocket);
+    const storedId = localStorage.getItem("prophet_user_id");
+    const storedName = localStorage.getItem("prophet_user_name");
+    if (!storedId) {
+      router.push("/sign-in");
+      return;
+    }
+    setUserId(storedId);
+    setUserName(storedName || "Unknown Interface");
 
-    const fetchUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      newSocket.emit("identify", {
-        role: "user",
-        name: user?.user_metadata?.full_name || "Unknown Interface",
-        email: user?.email || "N/A"
+    // Load previous messages for this user
+    supabase
+      .from("chat_messages")
+      .select("*")
+      .eq("user_id", storedId)
+      .order("created_at", { ascending: true })
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          const loaded = data.map((m: any) => ({ role: m.role as "user" | "admin", content: m.content }));
+          setMessages(prev => [prev[0], ...loaded]);
+        }
       });
-    };
-    fetchUser();
 
-    newSocket.on("receive_admin_message", (text) => {
-      setMessages(prev => [...prev, { role: "agent", content: text }]);
-    });
+    // Subscribe to new messages via Postgres Changes (reliable, persistent)
+    const channel = supabase
+      .channel(`chat_${storedId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "chat_messages",
+          filter: `user_id=eq.${storedId}`
+        },
+        (payload) => {
+          const msg = payload.new as any;
+          // Only append admin replies (user messages we add optimistically)
+          if (msg.role === "admin") {
+            setMessages(prev => [...prev, { role: "admin", content: msg.content }]);
+          }
+        }
+      )
+      .subscribe();
 
     return () => {
-      newSocket.disconnect();
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [router]);
 
-  const handleSend = (e?: React.FormEvent) => {
+  const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!input.trim() || !socket) return;
+    if (!input.trim() || !userId) return;
 
     const userMessage = input.trim();
-    setMessages(prev => [...prev, { role: "user", content: userMessage }]);
-    socket.emit("user_message", userMessage);
     setInput("");
+    setLoading(true);
+
+    // Optimistically show message
+    setMessages(prev => [...prev, { role: "user", content: userMessage }]);
+
+    // Persist to DB — admin will see it via Postgres Changes
+    await supabase.from("chat_messages").insert({
+      user_id: userId,
+      user_name: userName,
+      role: "user",
+      content: userMessage
+    });
+
+    setLoading(false);
   };
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
+  const handleSignOut = () => {
+    localStorage.removeItem("prophet_user_id");
+    localStorage.removeItem("prophet_user_name");
     router.push("/");
   };
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground font-sans">
-      
       {/* Header */}
       <header className="border-b border-zinc-900 px-6 py-4 flex items-center justify-between sticky top-0 bg-background z-10 backdrop-blur-md">
         <div className="flex items-center gap-6">
@@ -82,7 +120,7 @@ export default function Chatbot() {
           <div className="hidden md:block text-xs text-zinc-600 font-bold tracking-widest uppercase border border-zinc-800 px-3 py-1">
             Secure Channel
           </div>
-          <button 
+          <button
             onClick={handleSignOut}
             className="text-xs font-bold uppercase tracking-widest text-zinc-500 hover:text-red-500 transition-colors flex items-center gap-2"
           >
@@ -96,7 +134,7 @@ export default function Chatbot() {
         <div className="max-w-4xl mx-auto space-y-8 pb-32">
           {messages.map((msg, i) => (
             <div key={i} className={`flex items-start gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
-              {msg.role === "agent" ? (
+              {msg.role === "admin" ? (
                 <div className="w-10 h-10 border border-accent flex items-center justify-center bg-[#050505] shrink-0">
                   <Cpu className="w-5 h-5 text-accent" strokeWidth={1.5} />
                 </div>
@@ -105,9 +143,8 @@ export default function Chatbot() {
                   <User className="w-5 h-5 text-zinc-400" strokeWidth={1.5} />
                 </div>
               )}
-              
               <div className={`p-5 max-w-[80%] md:max-w-[70%] text-sm md:text-base leading-relaxed font-light ${
-                msg.role === "agent" 
+                msg.role === "admin"
                   ? "border border-zinc-800 bg-[#0a0a09] text-zinc-300"
                   : "bg-foreground text-background"
               }`}>
@@ -115,7 +152,6 @@ export default function Chatbot() {
               </div>
             </div>
           ))}
-
           {loading && (
             <div className="flex items-start gap-4 flex-row">
               <div className="w-10 h-10 border border-accent flex items-center justify-center bg-[#050505] shrink-0">
@@ -125,7 +161,7 @@ export default function Chatbot() {
                 <span className="w-1.5 h-1.5 bg-accent inline-block animate-bounce"></span>
                 <span className="w-1.5 h-1.5 bg-accent inline-block animate-bounce delay-100"></span>
                 <span className="w-1.5 h-1.5 bg-accent inline-block animate-bounce delay-200"></span>
-                <span className="ml-2 uppercase tracking-widest text-xs font-bold text-accent">Calculating...</span>
+                <span className="ml-2 uppercase tracking-widest text-xs font-bold text-accent">Transmitting...</span>
               </div>
             </div>
           )}
@@ -135,16 +171,16 @@ export default function Chatbot() {
 
       {/* Input Area */}
       <div className="fixed bottom-0 left-0 right-0 border-t border-zinc-900 bg-background/90 p-4 backdrop-blur-xl">
-        <div className="max-w-4xl mx-auto backdrop-blur-xl">
+        <div className="max-w-4xl mx-auto">
           <form onSubmit={handleSend} className="relative flex items-center">
-            <input 
+            <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Query the Prophet model..."
               className="w-full border border-zinc-800 bg-transparent py-4 pl-6 pr-16 text-foreground placeholder:text-zinc-600 focus:border-accent focus:outline-none focus:ring-0 transition-colors font-light"
             />
-            <button 
+            <button
               type="submit"
               disabled={loading || !input.trim()}
               className="absolute right-2 top-2 bottom-2 bg-foreground text-background px-4 flex items-center justify-center hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -157,7 +193,6 @@ export default function Chatbot() {
           </div>
         </div>
       </div>
-
     </div>
   );
 }

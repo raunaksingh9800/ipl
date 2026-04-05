@@ -3,13 +3,17 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
-import { Zap, Info } from "lucide-react";
+import { Zap, Info, LogIn } from "lucide-react";
 
 export default function Home() {
   const [showSplash, setShowSplash] = useState(true);
   const [matchData, setMatchData] = useState("Loading Match Data...");
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
+    // Check auth
+    setIsLoggedIn(!!localStorage.getItem("prophet_user_id"));
+
     // Fetch dynamic match data
     const fetchMatch = async () => {
       try {
@@ -78,12 +82,25 @@ export default function Home() {
       </AnimatePresence>
 
       {!showSplash && (
-        <motion.main
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1, delay: 0.2 }}
-          className="flex flex-col items-center justify-center w-full max-w-4xl px-6 py-12"
-        >
+        <>
+          <div className="absolute top-8 right-6 md:top-12 md:right-12 z-50">
+            {isLoggedIn ? (
+              <Link href="/prediction" className="inline-flex items-center gap-2 text-zinc-500 hover:text-accent uppercase tracking-widest text-xs font-semibold transition-colors">
+                Dashboard
+              </Link>
+            ) : (
+              <Link href="/sign-in" className="inline-flex items-center gap-2 text-zinc-500 hover:text-accent uppercase tracking-widest text-xs font-semibold transition-colors">
+                <LogIn className="w-4 h-4" /> Sign In
+              </Link>
+            )}
+          </div>
+
+          <motion.main
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 1, delay: 0.2 }}
+            className="flex flex-col items-center justify-center w-full max-w-4xl px-6 py-12 relative"
+          >
           {/* Chip */}
           <div className="border border-accent/30 bg-accent/5 px-4 py-1.5 mb-8 flex items-center gap-2 uppercase tracking-widest text-xs font-semibold text-accent max-w-[90vw] text-center">
             <span className="shrink-0 w-2 h-2 bg-accent animate-pulse" style={{ borderRadius: 0 }}></span>
@@ -99,13 +116,23 @@ export default function Home() {
           </p>
 
           <div className="flex flex-col sm:flex-row w-full sm:w-auto items-center gap-6">
-            <Link
-              href="/pricing"
-              className="group relative flex w-full sm:w-auto items-center justify-center gap-3 bg-foreground text-background px-8 py-4 font-bold tracking-widest uppercase hover:bg-accent hover:text-black transition-all duration-300"
-            >
-              <Zap className="w-5 h-5 fill-current" />
-              <span>Predict at 25₹</span>
-            </Link>
+            {isLoggedIn ? (
+              <Link
+                href="/prediction"
+                className="group relative flex w-full sm:w-auto items-center justify-center gap-3 bg-accent text-black px-8 py-4 font-bold tracking-widest uppercase hover:bg-accent/80 transition-all duration-300"
+              >
+                <Zap className="w-5 h-5 fill-black" />
+                <span>Resume Prediction</span>
+              </Link>
+            ) : (
+              <Link
+                href="/pricing"
+                className="group relative flex w-full sm:w-auto items-center justify-center gap-3 bg-foreground text-background px-8 py-4 font-bold tracking-widest uppercase hover:bg-accent hover:text-black transition-all duration-300"
+              >
+                <Zap className="w-5 h-5 fill-current" />
+                <span>Predict at 25₹</span>
+              </Link>
+            )}
 
             <Link
               href="/learn-more"
@@ -139,6 +166,7 @@ export default function Home() {
           </footer>
 
         </motion.main>
+        </>
       )}
     </div>
   );
