@@ -129,6 +129,15 @@ export default function Home() {
             ))}
           </div>
 
+          <footer className="mt-32 w-full pt-12 border-t border-zinc-900/50 flex flex-col items-center">
+            <div className="flex flex-wrap justify-center gap-6 md:gap-12 mb-6">
+              <Link href="/legal" className="text-[10px] uppercase tracking-widest text-zinc-600 hover:text-zinc-400 transition-colors">Privacy Policy</Link>
+              <Link href="/legal" className="text-[10px] uppercase tracking-widest text-zinc-600 hover:text-zinc-400 transition-colors">Terms of Service</Link>
+              <Link href="/legal" className="text-[10px] uppercase tracking-widest text-zinc-600 hover:text-zinc-400 transition-colors">Disclaimer</Link>
+            </div>
+            <p className="text-[10px] text-zinc-800 uppercase tracking-widest font-bold">© 2026 Prophet AI Predictor. All rights reserved.</p>
+          </footer>
+
         </motion.main>
       )}
     </div>
